@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
+import ssl
 import time
+from pathlib import Path
 from multiprocessing import Queue
 
 import aiohttp
@@ -40,7 +43,38 @@ class User:
 
     async def user_loop(self) -> None:
         """sends request continuously while sending request info to metrics queue"""
-        async with aiohttp.ClientSession() as session:
+        # Configure SSL behavior from environment variable LLM_LOCUST_SSL_CERT
+        # - If set to a path (file or directory), use it as custom CA bundle
+        # - If set to a falsy/disabled value (e.g., "false", "0", "disabled"), disable verification
+        # - Otherwise, use default verification
+        connector = None
+        ssl_env = os.getenv("LLM_LOCUST_SSL_CERT")
+        if ssl_env is not None and ssl_env.strip() != "":
+            val = ssl_env.strip()
+            disabled_values = {"0", "false", "no", "disable", "disabled", "insecure", "skip", "ignore"}
+            if val.lower() in disabled_values:
+                logger.warning("SSL certificate verification DISABLED via LLM_LOCUST_SSL_CERT")
+                connector = aiohttp.TCPConnector(ssl=False)
+            else:
+                path = Path(val)
+                if path.exists():
+                    try:
+                        if path.is_file():
+                            ctx = ssl.create_default_context(cafile=str(path))
+                        else:
+                            ctx = ssl.create_default_context()
+                            ctx.load_verify_locations(capath=str(path))
+                        logger.info("Using custom CA for SSL verification from %s", str(path))
+                        connector = aiohttp.TCPConnector(ssl=ctx)
+                    except Exception as e:
+                        logger.exception("Failed to load SSL certs from %s: %s", str(path), e)
+                        connector = None  # fall back to default
+                else:
+                    logger.warning(
+                        "LLM_LOCUST_SSL_CERT is set to '%s' but path does not exist. Using default SSL verification.",
+                        val,
+                    )
+        async with aiohttp.ClientSession(connector=connector) as session:
             while self.run:
                 url, headers, data, input_data = self.model_client.get_request_params()
                 start_time = time.perf_counter()
