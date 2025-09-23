@@ -48,6 +48,29 @@ Details:
 ![design diagram](image.png)
 
 
+## Serve under a root path (reverse proxy prefixes)
+If you need the API and Web UI to be served from a URL prefix (for example behind a reverse proxy at `/api/v1`), set the environment variable `LLM_LOCUST_ROOT_PATH`.
+
+- Example values: `/api/v1`, `locust` (equivalent to `/locust`).
+- When set, the backend will configure Uvicorn and FastAPI to serve under this prefix, and the Web UI will rewrite asset URLs accordingly.
+
+Examples
+- Local run with prefix `/api/v1`:
+  ```bash
+  set LLM_LOCUST_ROOT_PATH=/api/v1
+  python api.py
+  # Visit http://localhost:8089/api/v1/
+  ```
+- Docker run with prefix `/locust`:
+  ```bash
+  docker run --rm -p 8089:8089 \
+    -e LLM_LOCUST_ROOT_PATH=/locust \
+    llm-locust:offline
+  # Visit http://localhost:8089/locust/
+  ```
+
+Note: If you terminate with a trailing slash, it will be normalized away (e.g., `/api/v1/` becomes `/api/v1`). The default when unset is to serve at the root (`/`).
+
 ## TLS / Custom CA and self-signed certificates
 If your target API uses a self-signed certificate, you can control SSL verification via the environment variable `LLM_LOCUST_SSL_CERT`.
 

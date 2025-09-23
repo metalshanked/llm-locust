@@ -3,6 +3,7 @@ import asyncio
 import csv
 import logging
 import logging.config
+import os
 import time
 from io import StringIO
 from multiprocessing import Process, Queue
@@ -123,7 +124,21 @@ parser.add_argument("--host", type=str, default="http://localhost:8000")
 parser.add_argument("--spawn_rate", type=float, default=1.0)
 
 args = parser.parse_args()
-app = FastAPI(title="LLM Load Testing API")
+
+# Determine root path from environment variable (optional)
+# If set, the application and server will serve under this prefix, e.g., "/api/v1"
+ROOT_PATH = os.getenv("LLM_LOCUST_ROOT_PATH", "").strip()
+if ROOT_PATH and not ROOT_PATH.startswith("/"):
+    ROOT_PATH = f"/{ROOT_PATH}"
+# Remove trailing slash (except if ROOT_PATH is exactly "/")
+if ROOT_PATH and ROOT_PATH != "/":
+    ROOT_PATH = ROOT_PATH.rstrip("/")
+
+# Initialize FastAPI (include root_path only if provided)
+if ROOT_PATH:
+    app = FastAPI(title="LLM Load Testing API", root_path=ROOT_PATH)
+else:
+    app = FastAPI(title="LLM Load Testing API")
 (
     STATE_INIT,
     STATE_SPAWNING,
@@ -395,36 +410,31 @@ app.mount("/assets", StaticFiles(directory=str(dist_dir / "assets")), name="asse
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(request: Request) -> HTMLResponse:
-    template_args = {
-        "available_shape_classes": ["Default"],
-        "available_user_classes": ["ExampleUser"],
-        "percentiles_to_chart": [0.5, 0.95],
-        "extra_options": {},
-        "history": [],
-        "host": "https://www.example.com",
-        "is_distributed": False,
-        "is_shape": None,
-        "locustfile": "main.py",
-        "num_users": None,
-        "override_host_warning": False,
-        "show_userclass_picker": False,
-        "spawn_rate": None,
-        "state": "ready",
-        "stats_history_enabled": False,
-        "tasks": "{}",
-        "user_count": 0,
-        "version": "2.15.0",
-        "worker_count": 0,
-    }
+    # Load the built index.html and adjust absolute asset URLs when served behind a root path
+    try:
+        html = (dist_dir / "index.html").read_text(encoding="utf-8")
+    except Exception:
+        # Fallback to template rendering if index is not available
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request},
+        )
 
-    return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
-            "template_args": template_args,
-            "theme": "",  # Optional theme parameter
-        },
-    )
+    # Determine effective root path (prefer request scope, fallback to env)
+    effective_root = request.scope.get("root_path") or ROOT_PATH or ""
+    if effective_root and effective_root != "/":
+        # Normalize: ensure single leading slash, no trailing slash (unless just "/")
+        if not effective_root.startswith("/"):
+            effective_root = "/" + effective_root
+        if len(effective_root) > 1 and effective_root.endswith("/"):
+            effective_root = effective_root.rstrip("/")
+        # Rewrite absolute asset references like src="/assets/..." or href="/assets/..."
+        html = html.replace('src="/assets/', f'src="{effective_root}/assets/')
+        html = html.replace('href="/assets/', f'href="{effective_root}/assets/')
+        # Optionally rewrite the root path for favicon or other absolute "/" links if present
+        html = html.replace('href="/favicon', f'href="{effective_root}/favicon')
+
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 @app.post("/swarm")
@@ -600,6 +610,9 @@ if __name__ == "__main__":
     # Start FastAPI
     import uvicorn
 
+    if ROOT_PATH:
+        logging.getLogger(__name__).info("Serving under root path: %s", ROOT_PATH)
+
     uvicorn.run(
         app,
         host="0.0.0.0",
@@ -607,4 +620,5 @@ if __name__ == "__main__":
         log_level="info",
         log_config="logging.conf",
         use_colors=True,
+        root_path=ROOT_PATH if ROOT_PATH else None,
     )
